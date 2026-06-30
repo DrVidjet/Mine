@@ -12,7 +12,7 @@ const float MOUSE_DOWN_LIMIT = -1.5f;
 const float HERO_SPEED = 10.0f;
 
 // Константы мира
-const int WORLD_SIZE = 100;
+const int WORLD_SIZE = 1000;
 const int CHUNK_SIZE = 16;
 const float STEP = 0.05f;
 const float MAX_DIST = 8.0f;
@@ -52,30 +52,85 @@ struct BlockTextures {
     Texture2D bottom;
 };
 
+void DrawTexturedQuad(Texture2D texture, Vector3 v1, Vector3 v2, Vector3 v3, Vector3 v4) {
+    rlSetTexture(texture.id);
+
+    rlBegin(RL_QUADS);
+    rlColor4ub(255, 255, 255, 255);
+
+    rlTexCoord2f(0.0f, 1.0f);
+    rlVertex3f(v1.x, v1.y, v1.z);
+
+    rlTexCoord2f(1.0f, 1.0f);
+    rlVertex3f(v2.x, v2.y, v2.z);
+
+    rlTexCoord2f(1.0f, 0.0f);
+    rlVertex3f(v3.x, v3.y, v3.z);
+
+    rlTexCoord2f(0.0f, 0.0f);
+    rlVertex3f(v4.x, v4.y, v4.z);
+    rlEnd();
+
+    rlSetTexture(0);
+}
+
 class Block
 {
 public:
+    BlockType type = BlockType::AIR;
+
     static void Draw(Vector3 position, Texture2D topTex, Texture2D sideTex, Texture2D bottomTex) {
         float x = position.x;
         float y = position.y;
         float z = position.z;
 
-        // Верх (y+1)
+        // Верх
         DrawTexturedQuad(topTex,
-                         { x,     y + 1, z + 1 },
-                         { x + 1, y + 1, z + 1 },
-                         { x + 1, y + 1, z     },
-                         { x,     y + 1, z     }
+                         {x,     y+1, z+1},
+                         {x+1,   y+1, z+1},
+                         {x+1,   y+1, z},
+                         {x,     y+1, z}
         );
 
-        // Низ (y)
+        // Низ
         DrawTexturedQuad(bottomTex,
-                         { x,     y, z     },
-                         { x + 1, y, z     },
-                         { x + 1, y, z + 1 },
-                         { x,     y, z + 1 }
+                         {x,     y, z},
+                         {x+1,   y, z},
+                         {x+1,   y, z+1},
+                         {x,     y, z+1}
         );
 
+        // Зад (Z+)
+        DrawTexturedQuad(sideTex,
+                         {x,   y,   z+1},
+                         {x+1, y,   z+1},
+                         {x+1, y+1, z+1},
+                         {x,   y+1, z+1}
+        );
+
+        // Перед (Z)
+        DrawTexturedQuad(sideTex,
+                         {x+1, y,   z},
+                         {x,   y,   z},
+                         {x,   y+1, z},
+                         {x+1, y+1, z}
+        );
+
+        // Правая (X+)
+        DrawTexturedQuad(sideTex,
+                         {x+1, y,   z+1},
+                         {x+1, y,   z},
+                         {x+1, y+1, z},
+                         {x+1, y+1, z+1}
+        );
+
+        // Левая (X)
+        DrawTexturedQuad(sideTex,
+                         {x, y,   z},
+                         {x, y,   z+1},
+                         {x, y+1, z+1},
+                         {x, y+1, z}
+        );
 
     }
 };
@@ -116,7 +171,7 @@ public:
         }
     }
 
-    void Draw() {
+    void Draw(    Texture2D grassTopTexture, Texture2D grassSideTexture, Texture2D dirtTexture) {
         for (auto& pair : chunks) {
             ChunkCoord coord = pair.first;
             Chunk& chunk = pair.second;
@@ -129,36 +184,9 @@ public:
                             float worldY = coord.y * CHUNK_SIZE + y;
                             float worldZ = coord.z * CHUNK_SIZE + z;
 
-                            DrawCube(
-                                { worldX + 0.5f, worldY + 0.5f, worldZ + 0.5f },
-                                1.0f, 1.0f, 1.0f, DARKGREEN
-                            );
+                            Block::Draw({worldX, worldY, worldZ}, grassTopTexture, grassSideTexture, dirtTexture);
                         }
         }
-
-        DrawGrid(100, 1.0f);
-    }
-
-    void DrawTexturedQuad(Texture2D texture, Vector3 v1, Vector3 v2, Vector3 v3, Vector3 v4) {
-        rlSetTexture(texture.id);
-
-        rlBegin(RL_QUADS);
-        rlColor4ub(255, 255, 255, 255);
-
-        rlTexCoord2f(0.0f, 1.0f);
-        rlVertex3f(v1.x, v1.y, v1.z);
-
-        rlTexCoord2f(1.0f, 1.0f);
-        rlVertex3f(v2.x, v2.y, v2.z);
-
-        rlTexCoord2f(1.0f, 0.0f);
-        rlVertex3f(v3.x, v3.y, v3.z);
-
-        rlTexCoord2f(0.0f, 0.0f);
-        rlVertex3f(v4.x, v4.y, v4.z);
-        rlEnd();
-
-        rlSetTexture(0);
     }
 
     void DrawSelection(int hx, int hy, int hz) {
@@ -225,10 +253,6 @@ int main() {
     DisableCursor();
     SetTargetFPS(165);
 
-    Texture2D grassTopTexture  = LoadTexture("textures/grasstop.png");
-    Texture2D grassSideTexture = LoadTexture("textures/grass.png");
-    Texture2D dirtTexture      = LoadTexture("textures/dirt.png");
-
     Hero hero;
     hero.pos = { 8.0f, 3.0f, 8.0f }; // стартуем над картой, по центру
 
@@ -238,6 +262,11 @@ int main() {
     camera.projection = CAMERA_PERSPECTIVE;
 
     World world;
+
+    // Текстуры
+    Texture2D grassTopTexture  = LoadTexture("textures/grasstop.png");
+    Texture2D grassSideTexture = LoadTexture("textures/grass.png");
+    Texture2D dirtTexture      = LoadTexture("textures/dirt.png");
 
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
@@ -266,14 +295,8 @@ int main() {
 
         // Блоки мира
         world.UpdateLoadedChunks(playerChunkX, playerChunkZ);
-        world.Draw();
-        world.DrawTexturedQuad(
-            grassTopTexture,
-            { 0.0f, 3.0f, 1.0f },  // нижний левый (если смотреть сверху на грань y=1)
-        { 1.0f, 3.0f, 1.0f },  // нижний правый
-        { 1.0f, 3.0f, 0.0f },  // верхний правый
-        { 0.0f, 3.0f, 0.0f }   // верхний левый
-        );
+        world.Draw(grassTopTexture, grassSideTexture, dirtTexture);
+        Block::Draw({0, 3, 0}, grassTopTexture, grassSideTexture, dirtTexture);
 
         EndMode3D();
 
