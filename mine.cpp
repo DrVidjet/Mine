@@ -1,5 +1,7 @@
 #include <raylib.h>
 #include <raymath.h>
+#include <rlgl.h>
+#include <unordered_map>
 
 // Константы мыши
 const float MOUSE_SENSE = 0.003f;
@@ -10,17 +12,161 @@ const float MOUSE_DOWN_LIMIT = -1.5f;
 const float HERO_SPEED = 10.0f;
 
 // Константы мира
-const int WORLD_SIZE = 16;
+const int WORLD_SIZE = 100;
+const int CHUNK_SIZE = 16;
+const float STEP = 0.05f;
+const float MAX_DIST = 8.0f;
+const int DRAW_DISTANCE = 1; // Дальность прорисовки
+// Формула (2xDRAW_DISTANCE +1)x2^3(Потому что 3 измерения координат) =
+// =(2x1 +1)^3 = 9 чанков вокруг игрока
+
+struct ChunkCoord {
+  int x, y, z;
+};
+
+bool operator==(const ChunkCoord& a, const ChunkCoord& b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+
+namespace std {
+    template<>
+    struct hash<ChunkCoord> {
+        size_t operator()(const ChunkCoord& c) const {
+            size_t h1 = std::hash<int>()(c.x);
+            size_t h2 = std::hash<int>()(c.y);
+            size_t h3 = std::hash<int>()(c.z);
+            return h1 ^ (h2 << 1) ^ (h3 << 2);
+        }
+    };
+}
+
+enum class BlockType {
+    AIR,
+    GRASS,
+    DIRT,
+};
+
+struct BlockTextures {
+    Texture2D top;
+    Texture2D side;
+    Texture2D bottom;
+};
+
+class Block
+{
+public:
+    static void Draw(Vector3 position, Texture2D topTex, Texture2D sideTex, Texture2D bottomTex) {
+        float x = position.x;
+        float y = position.y;
+        float z = position.z;
+
+        // Верх (y+1)
+        DrawTexturedQuad(topTex,
+                         { x,     y + 1, z + 1 },
+                         { x + 1, y + 1, z + 1 },
+                         { x + 1, y + 1, z     },
+                         { x,     y + 1, z     }
+        );
+
+        // Низ (y)
+        DrawTexturedQuad(bottomTex,
+                         { x,     y, z     },
+                         { x + 1, y, z     },
+                         { x + 1, y, z + 1 },
+                         { x,     y, z + 1 }
+        );
+
+
+    }
+};
+
+class Chunk
+{
+public:
+    Block blocks[CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE];
+
+    void Generate() {
+        for (int x = 0; x < CHUNK_SIZE; x++) for (int y = 0; y < CHUNK_SIZE; y++) for (int z = 0; z < CHUNK_SIZE; z++) if (y != 0) blocks[x][y][z].type = BlockType::AIR; else blocks[x][y][z].type = BlockType::GRASS;
+    }
+};
 
 class World
 {
 public:
-    int map[WORLD_SIZE][WORLD_SIZE][WORLD_SIZE] = {};
+    std::unordered_map<ChunkCoord, Chunk> chunks;
 
-    void Init() {
-        for (int x = 0; x < WORLD_SIZE; x++)
-            for (int z = 0; z < WORLD_SIZE; z++)
-                map[x][0][z] = 1;
+    Chunk& GetChunk(int cx, int cy, int cz) {
+        ChunkCoord key = {cx, cy, cz};
+
+        auto it = chunks.find(key);
+        if (it != chunks.end()) {
+            return it->second;
+        }
+
+        Chunk& newChunk = chunks[key];
+        newChunk.Generate();
+        return newChunk;
+    }
+
+    void UpdateLoadedChunks(int playerChunkX, int playerChunkZ) {
+        for (int dx = -DRAW_DISTANCE; dx <= DRAW_DISTANCE; dx++) {
+            for (int dz = -DRAW_DISTANCE; dz <= DRAW_DISTANCE; dz++) {
+                GetChunk(playerChunkX + dx, 0, playerChunkZ + dz);
+            }
+        }
+    }
+
+    void Draw() {
+        for (auto& pair : chunks) {
+            ChunkCoord coord = pair.first;
+            Chunk& chunk = pair.second;
+
+            for (int x = 0; x < CHUNK_SIZE; x++)
+                for (int y = 0; y < CHUNK_SIZE; y++)
+                    for (int z = 0; z < CHUNK_SIZE; z++)
+                        if (chunk.blocks[x][y][z].type != BlockType::AIR) {
+                            float worldX = coord.x * CHUNK_SIZE + x;
+                            float worldY = coord.y * CHUNK_SIZE + y;
+                            float worldZ = coord.z * CHUNK_SIZE + z;
+
+                            DrawCube(
+                                { worldX + 0.5f, worldY + 0.5f, worldZ + 0.5f },
+                                1.0f, 1.0f, 1.0f, DARKGREEN
+                            );
+                        }
+        }
+
+        DrawGrid(100, 1.0f);
+    }
+
+    void DrawTexturedQuad(Texture2D texture, Vector3 v1, Vector3 v2, Vector3 v3, Vector3 v4) {
+        rlSetTexture(texture.id);
+
+        rlBegin(RL_QUADS);
+        rlColor4ub(255, 255, 255, 255);
+
+        rlTexCoord2f(0.0f, 1.0f);
+        rlVertex3f(v1.x, v1.y, v1.z);
+
+        rlTexCoord2f(1.0f, 1.0f);
+        rlVertex3f(v2.x, v2.y, v2.z);
+
+        rlTexCoord2f(1.0f, 0.0f);
+        rlVertex3f(v3.x, v3.y, v3.z);
+
+        rlTexCoord2f(0.0f, 0.0f);
+        rlVertex3f(v4.x, v4.y, v4.z);
+        rlEnd();
+
+        rlSetTexture(0);
+    }
+
+    void DrawSelection(int hx, int hy, int hz) {
+        // Подсветка выделенного блока
+        DrawCubeWires(
+            { hx + 0.5f, hy + 0.5f, hz + 0.5f },
+            1.01f, 1.01f, 1.01f, WHITE
+        );
     }
 };
 
@@ -54,13 +200,34 @@ public:
         if (pitch >  MOUSE_UP_LIMIT)   pitch =  MOUSE_UP_LIMIT;
         if (pitch <  MOUSE_DOWN_LIMIT)  pitch =  MOUSE_DOWN_LIMIT;
     }
+
+    void HUD() {
+        DrawFPS(10, 10);
+        DrawText(TextFormat("Pos: %.1f %.1f %.1f", pos.x, pos.y, pos.z),
+                 10, 34, 20, WHITE);
+
+        int cx = GetScreenWidth()  / 2;
+        int cy = GetScreenHeight() / 2;
+        DrawLine(cx - 10, cy, cx + 10, cy, WHITE);
+        DrawLine(cx, cy - 10, cx, cy + 10, WHITE);
+    }
+
+    bool RayCast(const Camera3D &camera, const World &world, int &hx, int &hy, int &hz) {
+        return false; // TODO: переписать под чанки
+    }
 };
+
+
 
 int main() {
     InitWindow(GetMonitorWidth(0), GetMonitorHeight(0), "Mine");
     SetWindowState(FLAG_WINDOW_UNDECORATED);
     DisableCursor();
     SetTargetFPS(165);
+
+    Texture2D grassTopTexture  = LoadTexture("textures/grasstop.png");
+    Texture2D grassSideTexture = LoadTexture("textures/grass.png");
+    Texture2D dirtTexture      = LoadTexture("textures/dirt.png");
 
     Hero hero;
     hero.pos = { 8.0f, 3.0f, 8.0f }; // стартуем над картой, по центру
@@ -71,7 +238,6 @@ int main() {
     camera.projection = CAMERA_PERSPECTIVE;
 
     World world;
-    world.Init();
 
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
@@ -86,75 +252,40 @@ int main() {
         camera.position = hero.pos;
         camera.target   = Vector3Add(hero.pos, forward);
 
-        // Рейкаст из центра экрана
-        Ray ray = GetMouseRay(
-            { GetScreenWidth() / 2.0f, GetScreenHeight() / 2.0f },
-                              camera
-        );
-
-        bool hit = false;
-        int hx = 0, hy = 0, hz = 0;
-
-        const float STEP = 0.05f;
-        const float MAX_DIST = 8.0f;
-
-        for (float t = 0; t < MAX_DIST; t += STEP) {
-            Vector3 point = Vector3Add(ray.position, Vector3Scale(ray.direction, t));
-
-            int x = (int)floorf(point.x);
-            int y = (int)floorf(point.y);
-            int z = (int)floorf(point.z);
-
-            if (x < 0 || y < 0 || z < 0 || x >= WORLD_SIZE || y >= WORLD_SIZE || z >= WORLD_SIZE)
-                continue;
-
-            if (world.map[x][y][z] == 1) {
-                hit = true;
-                hx = x; hy = y; hz = z;
-                break;
-            }
-        }
-
-        // --- Отрисовка ---
+        // Отрисовка
         BeginDrawing();
         ClearBackground(SKYBLUE);
-
         BeginMode3D(camera);
 
+        // Цель взгляда
+        int hx = 0, hy = 0, hz = 0;
+        if (hero.RayCast(camera, world, hx, hy, hz)) world.DrawSelection(hx, hy, hz);
+
+        int playerChunkX = (int)floorf(hero.pos.x / CHUNK_SIZE);
+        int playerChunkZ = (int)floorf(hero.pos.z / CHUNK_SIZE);
+
         // Блоки мира
-        for (int x = 0; x < WORLD_SIZE; x++)
-            for (int y = 0; y < WORLD_SIZE; y++)
-                for (int z = 0; z < WORLD_SIZE; z++)
-                    if (world.map[x][y][z] == 1)
-                        DrawCube(
-                            { x + 0.5f, y + 0.5f, z + 0.5f },
-                            1.0f, 1.0f, 1.0f, RED
-                        );
+        world.UpdateLoadedChunks(playerChunkX, playerChunkZ);
+        world.Draw();
+        world.DrawTexturedQuad(
+            grassTopTexture,
+            { 0.0f, 3.0f, 1.0f },  // нижний левый (если смотреть сверху на грань y=1)
+        { 1.0f, 3.0f, 1.0f },  // нижний правый
+        { 1.0f, 3.0f, 0.0f },  // верхний правый
+        { 0.0f, 3.0f, 0.0f }   // верхний левый
+        );
 
-                    // Подсветка выделенного блока
-                    if (hit)
-                        DrawCubeWires(
-                            { hx + 0.5f, hy + 0.5f, hz + 0.5f },
-                            1.01f, 1.01f, 1.01f, WHITE
-                        );
+        EndMode3D();
 
-                    DrawGrid(100, 1.0f);
+        // HUD
+        hero.HUD();
 
-                    EndMode3D();
-
-                    // Прицел
-                    int cx = GetScreenWidth()  / 2;
-                    int cy = GetScreenHeight() / 2;
-                    DrawLine(cx - 10, cy, cx + 10, cy, WHITE);
-                    DrawLine(cx, cy - 10, cx, cy + 10, WHITE);
-
-                    // HUD
-                    DrawFPS(10, 10);
-                    DrawText(TextFormat("Pos: %.1f %.1f %.1f", hero.pos.x, hero.pos.y, hero.pos.z),
-                             10, 34, 20, WHITE);
-
-                    EndDrawing();
+        EndDrawing();
     }
+
+    UnloadTexture(grassTopTexture);
+    UnloadTexture(grassSideTexture);
+    UnloadTexture(dirtTexture);
 
     CloseWindow();
     return 0;
