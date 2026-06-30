@@ -2,6 +2,7 @@
 #include <raymath.h>
 #include <rlgl.h>
 #include <unordered_map>
+#include <vector>
 
 // Константы мыши
 const float MOUSE_SENSE = 0.003f;
@@ -50,6 +51,12 @@ struct BlockTextures {
     Texture2D top;
     Texture2D side;
     Texture2D bottom;
+};
+
+struct Vertex
+{
+    Vector3 position;
+    Vector2 uv;
 };
 
 void DrawTexturedQuad(Texture2D texture, Vector3 v1, Vector3 v2, Vector3 v3, Vector3 v4) {
@@ -140,10 +147,79 @@ class Chunk
 public:
     Block blocks[CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE];
 
+    std::vector<Vertex> vertices;
+
     void Generate() {
         for (int x = 0; x < CHUNK_SIZE; x++) for (int y = 0; y < CHUNK_SIZE; y++) for (int z = 0; z < CHUNK_SIZE; z++) if (y != 0) blocks[x][y][z].type = BlockType::AIR; else blocks[x][y][z].type = BlockType::GRASS;
     }
+
+    void BuildMesh();
+
+    void AddVertex(float x, float y, float z, float u, float v)
+    {
+        Vertex vertex;
+
+        vertex.position = {x, y, z};
+        vertex.uv = {u, v};
+
+        vertices.push_back(vertex);
+    }
+
+    void AddQuad(
+        Vector3 v1,
+        Vector3 v2,
+        Vector3 v3,
+        Vector3 v4)
+    {
+        AddVertex(v1.x,v1.y,v1.z,0,1);
+        AddVertex(v2.x,v2.y,v2.z,1,1);
+        AddVertex(v3.x,v3.y,v3.z,1,0);
+        AddVertex(v4.x,v4.y,v4.z,0,0);
+    }
+
+    void DrawMesh(Texture2D texture)
+    {
+        rlSetTexture(texture.id);
+
+        rlBegin(RL_QUADS);
+
+        rlColor4ub(255,255,255,255);
+
+        for (const Vertex& vertex : vertices)
+        {
+            rlTexCoord2f(vertex.uv.x, vertex.uv.y);
+            rlVertex3f(
+                vertex.position.x,
+                vertex.position.y,
+                vertex.position.z
+            );
+        }
+
+        rlEnd();
+
+        rlSetTexture(0);
+    }
 };
+
+void Chunk::BuildMesh()
+{
+    vertices.clear();
+
+    for (int x = 0; x < CHUNK_SIZE; x++)
+        for (int y = 0; y < CHUNK_SIZE; y++)
+            for (int z = 0; z < CHUNK_SIZE; z++)
+            {
+                if (blocks[x][y][z].type == BlockType::AIR)
+                    continue;
+
+                AddQuad(
+                    {x,     y + 1.0f, z + 1.0f},
+                    {x + 1.0f, y + 1.0f, z + 1.0f},
+                    {x + 1.0f, y + 1.0f, z},
+                    {x,     y + 1.0f, z}
+                );
+            }
+}
 
 class World
 {
@@ -160,6 +236,7 @@ public:
 
         Chunk& newChunk = chunks[key];
         newChunk.Generate();
+        newChunk.BuildMesh();
         return newChunk;
     }
 
@@ -172,21 +249,7 @@ public:
     }
 
     void Draw(    Texture2D grassTopTexture, Texture2D grassSideTexture, Texture2D dirtTexture) {
-        for (auto& pair : chunks) {
-            ChunkCoord coord = pair.first;
-            Chunk& chunk = pair.second;
-
-            for (int x = 0; x < CHUNK_SIZE; x++)
-                for (int y = 0; y < CHUNK_SIZE; y++)
-                    for (int z = 0; z < CHUNK_SIZE; z++)
-                        if (chunk.blocks[x][y][z].type != BlockType::AIR) {
-                            float worldX = coord.x * CHUNK_SIZE + x;
-                            float worldY = coord.y * CHUNK_SIZE + y;
-                            float worldZ = coord.z * CHUNK_SIZE + z;
-
-                            Block::Draw({worldX, worldY, worldZ}, grassTopTexture, grassSideTexture, dirtTexture);
-                        }
-        }
+        for (auto& pair : chunks) pair.second.DrawMesh(grassTopTexture);
     }
 
     void DrawSelection(int hx, int hy, int hz) {
