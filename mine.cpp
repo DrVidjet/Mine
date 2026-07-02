@@ -171,8 +171,8 @@ class Chunk
 {
 public:
     Block blocks[CHUNK_SIZE][CHUNK_SIZE][CHUNK_SIZE];
-    Mesh mesh = {};
-    Model model = {};
+    std::unordered_map<BlockType, Mesh>  meshes;
+    std::unordered_map<BlockType, Model> models;
     bool meshDirty = true;
 
     void Generate() {
@@ -214,14 +214,14 @@ public:
     }
 
     void BuildMesh(std::unordered_map<BlockType, BlockTextures>& textures) {
-        if (model.meshCount > 0) {
-            UnloadModel(model);
-            mesh = {};
-            model = {};
-        }
+        // Выгружаем старые меши
+        for (auto& pair : models) UnloadModel(pair.second);
+        meshes.clear();
+        models.clear();
 
-        std::vector<float> vertices;
-        std::vector<float> texcoords;
+        // Отдельный вектор вершин для каждого типа блока
+        std::unordered_map<BlockType, std::vector<float>> vertMap;
+        std::unordered_map<BlockType, std::vector<float>> uvMap;
 
         for (int x = 0; x < CHUNK_SIZE; x++)
             for (int y = 0; y < CHUNK_SIZE; y++)
@@ -234,57 +234,67 @@ public:
                     float wy = (float)y;
                     float wz = (float)z;
 
+                    auto& verts = vertMap[block.type];
+                    auto& uvs   = uvMap[block.type];
+
                     if (!IsSolid(x, y+1, z))
-                        AddQuad(vertices, texcoords,
-                                {wx, wy+1, wz+1}, {wx+1, wy+1, wz+1},
+                        AddQuad(verts, uvs, {wx, wy+1, wz+1}, {wx+1, wy+1, wz+1},
                                 {wx+1, wy+1, wz}, {wx, wy+1, wz}, tex.top);
 
-                    if (!IsSolid(x, y-1, z))
-                        AddQuad(vertices, texcoords,
-                            {wx, wy, wz},   {wx+1, wy, wz},
-                            {wx+1, wy, wz+1}, {wx, wy, wz+1}, tex.bottom);
+                        if (!IsSolid(x, y-1, z))
+                            AddQuad(verts, uvs, {wx, wy, wz}, {wx+1, wy, wz},
+                                    {wx+1, wy, wz+1}, {wx, wy, wz+1}, tex.bottom);
 
-                    if (!IsSolid(x, y, z+1))
-                        AddQuad(vertices, texcoords,
-                            {wx, wy, wz+1},   {wx+1, wy, wz+1},
-                            {wx+1, wy+1, wz+1}, {wx, wy+1, wz+1}, tex.side);
+                            if (!IsSolid(x, y, z+1))
+                                AddQuad(verts, uvs, {wx, wy, wz+1}, {wx+1, wy, wz+1},
+                                        {wx+1, wy+1, wz+1}, {wx, wy+1, wz+1}, tex.side);
 
-                    if (!IsSolid(x, y, z-1))
-                        AddQuad(vertices, texcoords,
-                            {wx+1, wy, wz}, {wx, wy, wz},
-                            {wx, wy+1, wz}, {wx+1, wy+1, wz}, tex.side);
+                                if (!IsSolid(x, y, z-1))
+                                    AddQuad(verts, uvs, {wx+1, wy, wz}, {wx, wy, wz},
+                                            {wx, wy+1, wz}, {wx+1, wy+1, wz}, tex.side);
 
-                    if (!IsSolid(x+1, y, z))
-                        AddQuad(vertices, texcoords,
-                            {wx+1, wy, wz+1}, {wx+1, wy, wz},
-                            {wx+1, wy+1, wz}, {wx+1, wy+1, wz+1}, tex.side);
+                                    if (!IsSolid(x+1, y, z))
+                                        AddQuad(verts, uvs, {wx+1, wy, wz+1}, {wx+1, wy, wz},
+                                                {wx+1, wy+1, wz}, {wx+1, wy+1, wz+1}, tex.side);
 
-                    if (!IsSolid(x-1, y, z))
-                        AddQuad(vertices, texcoords,
-                            {wx, wy, wz},   {wx, wy, wz+1},
-                            {wx, wy+1, wz+1}, {wx, wy+1, wz}, tex.side);
+                                        if (!IsSolid(x-1, y, z))
+                                            AddQuad(verts, uvs, {wx, wy, wz}, {wx, wy, wz+1},
+                                                    {wx, wy+1, wz+1}, {wx, wy+1, wz}, tex.side);
                 }
 
-                if (vertices.empty()) return;
+                // Для каждого типа блока собираем отдельный меш
+                for (auto& pair : vertMap) {
+                    BlockType type = pair.first;
+                    auto& verts = pair.second;
+                    auto& uvs   = uvMap[type];
 
-        mesh.vertexCount   = vertices.size() / 3;
-        mesh.triangleCount = mesh.vertexCount / 3;
+                    if (verts.empty()) continue;
 
-        mesh.vertices  = (float*)MemAlloc(vertices.size()  * sizeof(float));
-        mesh.texcoords = (float*)MemAlloc(texcoords.size() * sizeof(float));
+                    Mesh m = {};
+                    m.vertexCount   = verts.size() / 3;
+                    m.triangleCount = m.vertexCount / 3;
 
-        memcpy(mesh.vertices,  vertices.data(),  vertices.size()  * sizeof(float));
-        memcpy(mesh.texcoords, texcoords.data(), texcoords.size() * sizeof(float));
+                    m.vertices  = (float*)MemAlloc(verts.size() * sizeof(float));
+                    m.texcoords = (float*)MemAlloc(uvs.size()   * sizeof(float));
 
-        Texture2D atlas = textures.begin()->second.atlas;
+                    memcpy(m.vertices,  verts.data(), verts.size() * sizeof(float));
+                    memcpy(m.texcoords, uvs.data(),   uvs.size()   * sizeof(float));
 
-        UploadMesh(&mesh, false);
-        model = LoadModelFromMesh(mesh);
+                    UploadMesh(&m, false);
+                    Model mdl = LoadModelFromMesh(m);
+                    mdl.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = textures[type].atlas;
 
-        // Привязываем атлас к материалу модели
-        model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = atlas;
+                    meshes[type] = m;
+                    models[type] = mdl;
+                }
 
-        meshDirty = false;
+                meshDirty = false;
+    }
+
+    void DrawMeshes(Vector3 chunkWorldPos) {
+        for (auto& pair : models) {
+            DrawModel(pair.second, chunkWorldPos, 1.0f, WHITE);
+        }
     }
 };
 
@@ -345,14 +355,12 @@ public:
 
             if (chunk.meshDirty) chunk.BuildMesh(textures);
 
-            if (chunk.model.meshCount > 0) {
-                Vector3 chunkWorldPos = {
-                    (float)(coord.x * CHUNK_SIZE),
-                    (float)(coord.y * CHUNK_SIZE),
-                    (float)(coord.z * CHUNK_SIZE)
-                };
-                DrawModel(chunk.model, chunkWorldPos, 1.0f, WHITE);
-            }
+            Vector3 chunkWorldPos = {
+                (float)(coord.x * CHUNK_SIZE),
+                (float)(coord.y * CHUNK_SIZE),
+                (float)(coord.z * CHUNK_SIZE)
+            };
+            chunk.DrawMeshes(chunkWorldPos);
         }
     }
 
