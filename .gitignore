@@ -2,3 +2,5 @@ Makefile.save
 mine.o
 mine
 CLAUDE.md
+*.blend1
+*.blend2
